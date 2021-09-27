@@ -50,6 +50,7 @@ impl<T> AtomicOptionBox<T> {
     }
 
     pub fn is_none(&self) -> bool {
+        // Only consider the bits of the pointer
         let ptr = self.ptr.load(Ordering::Relaxed);
         ptr.is_null()
     }
@@ -64,8 +65,8 @@ impl<T> AtomicOptionBox<T> {
         }
     }
 
-    pub fn unwrap(&mut self) -> T {
-        let ptr = self.ptr.load(Ordering::Relaxed);
+    pub fn unwrap(&mut self, ordering: Ordering) -> T {
+        let ptr = self.ptr.load(ordering);
         if ptr.is_null() {
             panic!("unwrap called on None AtomicOptionBox");
         } else {
@@ -118,8 +119,9 @@ impl<T> LifoPush<T> {
         let mut newnode = Box::new(Node::new(val));
         let current: *mut AtomicOptionBox<Node<T>> = &mut newnode.next;
         let new: *mut Node<T> = Box::into_raw(newnode);
+        // Release so that the Acquire in list_pop_all can see the contents of newnode.
         self.top
-            .spin_swap(current, new, Ordering::Relaxed, Ordering::Relaxed);
+            .spin_swap(current, new, Ordering::Release, Ordering::Relaxed);
     }
 
     pub fn list_pop_all<F>(&self, f: F)
@@ -129,7 +131,8 @@ impl<T> LifoPush<T> {
         let mut head = self.top.take(Ordering::Relaxed);
         // Readers may be at any position
         while !head.is_none() {
-            let (next, item) = head.unwrap().into_inner();
+            // Acquire all memory writes as we need to see the contents of the item
+            let (next, item) = head.unwrap(Ordering::Acquire).into_inner();
             f(item);
             head = next;
         }
