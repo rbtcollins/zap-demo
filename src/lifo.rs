@@ -10,15 +10,6 @@ use std::{
 
 /// AtomicOptionBox-alike but tailored for this algorithm. Conceptually this
 /// owns, or might own a T, and allows interior mutability.
-///
-/// Invalid -language-level- but valid assembly level from the paper:
-/// T1: load top -> var
-/// T2: null->top, top-> processed and free
-/// T1: var -> newnode.next
-/// T2: alloc newnode1 @ old top addr and push to top
-/// T1: CXW : newnode -> top
-/// T2: thread_pop_all; reads newnode then newnode1 then null.
-
 struct AtomicOptionBox<T> {
     ptr: AtomicPtr<T>,
     _marker: PhantomData<T>,
@@ -106,6 +97,7 @@ impl<T> Node<T> {
     }
 }
 
+#[derive(Default)]
 pub struct LifoPush<T> {
     top: AtomicOptionBox<Node<T>>,
 }
@@ -124,9 +116,9 @@ impl<T> LifoPush<T> {
             .spin_swap(current, new, Ordering::Release, Ordering::Relaxed);
     }
 
-    pub fn list_pop_all<F>(&self, f: F)
+    pub fn pop_all<F>(&self, mut f: F)
     where
-        F: Fn(T),
+        F: FnMut(T),
     {
         let mut head = self.top.take(Ordering::Relaxed);
         // Readers may be at any position
@@ -136,5 +128,53 @@ impl<T> LifoPush<T> {
             f(item);
             head = next;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{thread, time::Instant};
+
+    use crossbeam_utils::thread::scope;
+
+    use super::LifoPush;
+
+    fn timed<F: Fn()>(f: F) {
+        let now = Instant::now();
+        while now.elapsed().as_secs() < 10 {
+            println!("{:?}", now.elapsed().as_secs());
+            f()
+        }
+    }
+
+    #[test]
+    fn paper_scenario() {
+        // Invalid -language-level- but valid assembly level from the paper:
+        // T1: load top -> var
+        // T2: null->top, top-> processed and free
+        // T1: var -> newnode.next
+        // T2: alloc newnode1 @ old top addr and push to top
+        // T1: CXW : newnode -> top
+        // T2: thread_pop_all; reads newnode then newnode1 then null.
+
+        timed(|| {
+            let list: LifoPush<i64> = super::LifoPush::default();
+            // list.push(45);
+            // scope(|s| {
+            //     s.spawn(|_| {
+            //         list.push(67);
+            //     });
+
+            //     s.spawn(|_| {
+            //         list.pop_all(|_num| {});
+            //         list.push(89);
+            //         let mut acc = 0;
+            //         let acc_ref = &mut acc;
+            //         list.pop_all(|num| *acc_ref += num);
+            //         assert!(acc == 134 || acc == 201);
+            //     });
+            // })
+            // .unwrap();
+        });
     }
 }
